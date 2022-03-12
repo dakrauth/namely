@@ -10,10 +10,11 @@ looks like this:
     IMG1011.JPG
     IMG1012.JPG
     IMG_XYZ.JPG
-    
+
 Example #1 - regex:
 
-    $ %prog --dry-run --start 7 --width 3 --increment 2 --regex "IMG(\d\d)(\d+).*" "foo-\2-\#.jpg"  /var/photos/*
+    $ %prog --dry-run --start 7 --width 3 --increment 2 --regex "IMG(\d\d)(\d+).*" \
+        "foo-\2-\#.jpg"  /var/photos/*
     > /var/photos/IMG1010.JPG -> /var/photos/foo-10-007.jpg
     > /var/photos/IMG1011.JPG -> /var/photos/foo-11-009.jpg
     > /var/photos/IMG1012.JPG -> /var/photos/foo-12-011.jpg
@@ -33,16 +34,16 @@ Example #3 - complex regex:
     > Sailing 5:12/P1000354.JPG -> Sailing 5:12/sailing-5-12-001.jpg
     > Sailing 5:12/P1000355.JPG -> Sailing 5:12/sailing-5-12-002.jpg
     > Sailing 5:12/P1000357.JPG -> Sailing 5:12/sailing-5-12-003.jpg
-    
 '''
-
-import re, sys, os, pdb
+import os
+import re
+import sys
 import logging
 from optparse import OptionParser, OptionGroup
 
 logger = logging.getLogger(os.path.basename(__file__))
 
-#-------------------------------------------------------------------------------
+
 def get_files(dirname):
     files = []
     for fn in os.listdir(dirname):
@@ -53,37 +54,19 @@ def get_files(dirname):
     return files
 
 
-#===============================================================================
 class RenameError(Exception):
     pass
 
 
-#===============================================================================
 class SkipRename(Exception):
     pass
 
 
-#===============================================================================
-class FileObj(object):
-    def __init__(self, fn):
-        self.original = os.path.abspath(os.path.expanduser(fn))
-        self.path, self.filename = os.path.split(self.original)
-        _, self.parent = os.path.split(self.path)
-        self.base, self.ext = os.path.splitext(self.filename)
-
-    @property
-    def fqn(self):
-        return '{}.{}'.format(os.path.join(self.path, self.parent, self.base), self.ext)
-
-
-#===============================================================================
-class Rename(object):
-
+class Rename:
     increment_re = re.compile(r'(?<!\\)\\#')
-    dir_name_re  = re.compile(r'(?<!\\)\\@')
+    dir_name_re = re.compile(r'(?<!\\)\\@')
     normalize_re = re.compile(r'[\W]+')
-    
-    #---------------------------------------------------------------------------
+
     def __init__(
         self,
         number=1,
@@ -96,58 +79,56 @@ class Rename(object):
         normalize=None,
         special=None,
     ):
-        self.ext       = '.{}'.format(ext) if ext and not ext.startswith('.') else None
-        self.number    = number
-        self.regex     = regex
-        self.repl      = repl
+        self.ext = f'.{ext}' if ext and not ext.startswith('.') else None
+        self.number = number
+        self.regex = regex
+        self.repl = repl
         self.increment = increment
-        self.width     = width
+        self.width = width
         self.transform = transform
         self.normalize = normalize
-        self.special   = special
-        self.cwd_name  = os.path.split(os.getcwd())[1]
-    
-    #---------------------------------------------------------------------------
+        self.special = special
+        self.cwd_name = os.path.split(os.getcwd())[1]
+
     def _default_normalizer(self, name):
         name, ext = os.path.splitext(name)
         name = '-'.join(self.normalize_re.split(name))
         return name + ext
-    
-    #---------------------------------------------------------------------------
+
     def _process_file_name(self, old_name):
         pth, fname = os.path.split(old_name)
         _, dir_name = os.path.split(pth)
-        
+
         if not dir_name:
             if self.special:
-                raise SkipRename('... ARG "{}" is not a directory'.format(old_name))
-                
+                raise SkipRename(f'... ARG "{old_name}" is not a directory')
+
             dir_name = self.cwd_name
-            
+
         num_str = '{:0>{}}'.format(self.current_number, self.width)
         new_name = fname
-        
+
         if self.special:
             new_name = self._default_normalizer(dir_name).lower()
             _, ext = os.path.splitext(fname)
             if ext:
                 ext = ext.lower()
-                
-            new_name = '{}-{}{}'.format(new_name, num_str, ext)
+
+            new_name = f'{new_name}-{num_str}{ext}'
         else:
             if self.regex:
                 if self.regex.search(new_name):
-                    logging.debug('... Regex matched: {}'.format(new_name))
+                    logger.debug(f'... Regex matched: {new_name}')
                     new_name = self.regex.sub(self.repl, new_name)
                     new_name = self.dir_name_re.sub(dir_name, new_name)
                     new_name = self.increment_re.sub(num_str, new_name)
                 else:
-                    logging.debug('... NO Regex match: {}'.format(new_name))
-        
+                    logger.debug(f'... NO Regex match: {new_name}'
+
             if self.normalize:
                 fn = self.normalize if callable(self.normalize) else self._default_normalizer
                 new_name = fn(new_name)
-            
+
             if self.transform:
                 new_name = self.transform(new_name)
 
@@ -157,17 +138,16 @@ class Rename(object):
 
         new_name = os.path.join(pth, new_name)
         if new_name == old_name:
-            raise SkipRename('... Skipped (no change): {}'.format(new_name))
+            raise SkipRename(f'... Skipped (no change): {new_name}')
         else:
             if os.path.exists(new_name) and not os.path.samefile(old_name, new_name):
-                raise SkipRename('... Skipped (file exists): {}'.format(new_name))
+                raise SkipRename(f'... Skipped (file exists): {new_name}')
             else:
                 self.current_number += self.increment
                 return (old_name, new_name)
-    
-    #---------------------------------------------------------------------------
+
     def build(self, args):
-        count  = 0
+        count = 0
         args = list(args)
         args_count = len(args)
         self.width = self.width or args_count
@@ -179,37 +159,34 @@ class Rename(object):
                 dir_files = get_files(old_name)
                 if dir_files:
                     args_count += len(dir_files)
-                    logging.debug('... Including directory: {} (contains {} file(s))'.format(old_name, len(dir_files)))
+                    logger.debug(f'... Including directory: {old_name} ({args_count} file(s))')
                     args = dir_files + args
                 else:
-                    logging.debug('... Skipped directory (no files): {}'.format(old_name))
+                    logger.debug(f'... Skipped directory (no files): {old_name}')
 
                 continue
-            
+
             try:
                 yield self._process_file_name(old_name)
                 count += 1
-            except SkipRename, why:
-                logging.debug('{}'.format(why))
+            except SkipRename as why:
+                logger.debug(f'{why}')
 
-        logging.debug('Renamed {} of {}'.format(count, args_count))
+        logger.debug(f'Renamed {count} of {args_count}')
 
-    #---------------------------------------------------------------------------
     def rename(self, args):
         for old, new in args:
             os.rename(old, new)
-            
-    #---------------------------------------------------------------------------
+
     def __call__(self, args):
         self.rename(self.build(args))
 
 
-#-------------------------------------------------------------------------------
 def parse_opts():
     parser = OptionParser(usage=__doc__)
     parser.add_option(
-        '-e', 
-        '--ext', 
+        '-e',
+        '--ext',
         dest='ext',
         help='replaces the file name extension with the given value',
         default=None
@@ -217,7 +194,7 @@ def parse_opts():
 
     parser.add_option(
         '-C',
-        '--capitalize', 
+        '--capitalize',
         dest='capitalize',
         help='capitalize the file name.',
         action='store_true',
@@ -226,7 +203,7 @@ def parse_opts():
 
     parser.add_option(
         '-U',
-        '--upper', 
+        '--upper',
         dest='upper',
         help='Uppercase the file name.',
         action='store_true',
@@ -235,7 +212,7 @@ def parse_opts():
 
     parser.add_option(
         '-l',
-        '--lower', 
+        '--lower',
         dest='lower',
         help='lowercase the file name.',
         action='store_true',
@@ -244,18 +221,24 @@ def parse_opts():
 
     parser.add_option(
         '-z',
-        '--normalize', 
+        '--normalize',
         dest='normalize',
-        help='normalize the file name: all whitespace and non-alphanumeric are removed and replaced with dashes.',
+        help=(
+            'normalize the file name: all whitespace and non-alphanumeric are removed '
+            'and replaced with dashes.'
+        ),
         action='store_true',
         default=False
     )
 
     parser.add_option(
         '-x',
-        '--special', 
+        '--special',
         dest='special',
-        help='special case: all arguments must be directory names, all files changed to normalized, lowercase version of directory name with auto increment.',
+        help=(
+            'special case: all arguments must be directory names, all files changed to normalized, '
+            'lowercase version of directory name with auto increment.'
+        ),
         action='store_true',
         default=False
     )
@@ -264,11 +247,13 @@ def parse_opts():
         '-n',
         '--dry-run',
         dest='dry_run',
-        help='Don\'t actually rename the file(s), just show what the resultant name change will be.',
+        help=(
+            'Do not actually rename the file(s), just show what the resultant name change will be.'
+        ),
         action='store_true',
         default=False
     )
-    
+
     parser.add_option(
         '-v',
         '--verbose',
@@ -287,23 +272,23 @@ def parse_opts():
     )
 
     parser.add_option(
-        '-r', 
-        '--regex', 
+        '-r',
+        '--regex',
         dest='regex',
         help=(
             r'indicates regular expression replacement: 1st arg is regex, 2nd arg '
-             'is replacement expression; replacement string may contain \#, which '
-             'will be substituted as the current incremental value, or \@, which '
+             'is replacement expression; replacement string may contain \\#, which '
+             'will be substituted as the current incremental value, or \\@, which '
              'will be sbustituted as the file\'s parent directory name.'
         ),
         action='store_true',
         default=False
     )
 
-    regex_group = OptionGroup(parser, 'Regex Options','Only applicable with -r/--regex option')
+    regex_group = OptionGroup(parser, 'Regex Options', 'Only applicable with -r/--regex option')
     regex_group.add_option(
-        '-s', 
-        '--start', 
+        '-s',
+        '--start',
         dest='number',
         help='starting counter, defaults to 1',
         type='int',
@@ -311,8 +296,8 @@ def parse_opts():
     )
 
     regex_group.add_option(
-        '-i', 
-        '--increment', 
+        '-i',
+        '--increment',
         dest='increment',
         help='amount by which to increment the counter',
         type='int',
@@ -320,10 +305,10 @@ def parse_opts():
     )
 
     regex_group.add_option(
-        '-w', 
-        '--width', 
+        '-w',
+        '--width',
         dest='width',
-        help='zero pad the counter when using \#',
+        help='zero pad the counter when using \\#',
         type='int',
         default=2
     )
@@ -332,16 +317,19 @@ def parse_opts():
     return parser.parse_args()
 
 
-#-------------------------------------------------------------------------------
 def main():
     options, args = parse_opts()
     if options.pdb:
+        try:
+            import ipdb as pdb
+        except ImportError:
+            import pdb
         pdb.set_trace()
 
     logging.basicConfig(
-        level=logging.DEBUG if (options.verbose or options.dry_run) else logging.INFO
+        level=logging.DEBUG if options.verbose else logging.INFO
     )
-    
+
     transform = None
     if options.upper:
         transform = str.upper
@@ -349,7 +337,7 @@ def main():
         transform = str.lower
     elif options.capitalize:
         transform = str.capitalize
-    
+
     regex = options.regex
     if regex:
         if len(args) < 3:
@@ -357,12 +345,11 @@ def main():
 
         regex, repl = args[:2]
         args = args[2:]
-        logging.debug('REGEX: "{}" | REPL:  "{}"'.format(regex, repl))
+        logger.debug(f'REGEX: "{regex}" | REPL:  "{repl}"')
         regex = re.compile(regex or '.*')
     else:
         regex, repl = None, None
-    
-    
+
     renamer = Rename(
         number=options.number,
         ext=options.ext,
@@ -374,25 +361,22 @@ def main():
         normalize=options.normalize,
         special=options.special
     )
-    
+
     if options.dry_run:
-        logging.info('** DRY RUN ** Files are not renamed!')
+        logger.info('** DRY RUN ** Files are not renamed!')
         for old, new in renamer.build(args):
-            logging.info('{} -> {}'.format(old, new))
+            logger.info(f'{old} -> {new}')
     else:
         renamer(args)
 
 
-################################################################################
 if __name__ == '__main__':
     try:
         main()
-    except RenameError, why:
-        logging.error('Error: {}\n'.format(why))
+    except RenameError as why:
+        logger.error(f'Error: {why}\n')
         sys.exit(1)
-    except Exception, why:
-        logging.error('Unexpected Error: {}\n'.format(why))
+    except Exception as why:
+        logger.error(f'Unexpected Error: {why}\n')
         sys.exit(2)
-    else:
-        sys.exit(0)
-
+    sys.exit(0)
