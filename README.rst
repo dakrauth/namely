@@ -1,7 +1,8 @@
 namely
 ======
 
-::
+.. code-block:: shell
+
     namely [OPTIONS] [ARGS ...]
 
     For the following examples, assume we have a directory /var/photos which
